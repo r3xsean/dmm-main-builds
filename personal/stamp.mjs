@@ -5,7 +5,7 @@
 //   - writes the Tauri config overlay (personal update feed and key, no
 //     downgrades, the backup hook)
 import { readFileSync, writeFileSync, readdirSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const { VERSION, DETAIL, PERSONAL_DIR, OVERLAY } = process.env;
 for (const [k, v] of Object.entries({ VERSION, DETAIL, PERSONAL_DIR, OVERLAY })) {
@@ -34,12 +34,20 @@ if (en.branding?.nightlyBuild !== "Main") throw new Error("en.json has no brandi
 const conf = JSON.parse(readFileSync("apps/desktop/src-tauri/tauri.conf.json", "utf8"));
 if (!conf.plugins?.updater?.pubkey) throw new Error("tauri.conf.json no longer has plugins.updater.pubkey");
 
+// The hook's macro expands inside Tauri's generated installer.nsi, so relative
+// paths resolve from there. Write a copy that names the backup script absolutely.
+const hookTemplate = readFileSync(resolve(PERSONAL_DIR, "installer-hooks.nsh"), "utf8");
+const marker = "${__FILEDIR__}\\dmm-backup.ps1";
+if (!hookTemplate.includes(marker)) throw new Error("installer-hooks.nsh no longer references the backup script");
+const hookPath = resolve(dirname(OVERLAY), "installer-hooks.generated.nsh");
+writeFileSync(hookPath, hookTemplate.replace(marker, resolve(PERSONAL_DIR, "dmm-backup.ps1")));
+
 const overlay = {
   bundle: {
     createUpdaterArtifacts: false,
     windows: {
       allowDowngrades: false,
-      nsis: { installerHooks: resolve(PERSONAL_DIR, "installer-hooks.nsh") },
+      nsis: { installerHooks: hookPath },
     },
   },
   plugins: {
