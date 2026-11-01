@@ -1,8 +1,8 @@
 name: Build latest main
 
-# Builds the newest upstream `main` commit whose core CI passed, as a standalone
-# Windows exe, and publishes it as a release. Mirrors upstream's nightly build
-# settings (thin LTO, 16 codegen units) without signing or bundling.
+# Builds the newest upstream `main` commit whose core CI passed, as a personal
+# Deadlock Mod Manager installer with its own update feed, tests installing it
+# over the official nightly, then publishes it. See README.md.
 
 on:
   schedule:
@@ -14,95 +14,52 @@ on:
         required: false
         default: ""
       force:
-        description: "Build even if already built or no app changes"
+        description: "Build even if nothing changed"
         type: boolean
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
-# One build runs; at most one more waits. A newer trigger replaces the waiting one.
+# One run at a time; a newer trigger replaces the waiting one.
 concurrency:
   group: build-main
   cancel-in-progress: false
 
 env:
   UPSTREAM: deadlock-mod-manager/deadlock-mod-manager
-  # Upstream CI jobs that must pass on the exact commit.
   REQUIRED_CHECKS: "Type Check|Run Tests|Run Rust Tests"
+  NOTES_BASE: https://github.com/${{ github.repository }}/releases/tag
 
 jobs:
   pick:
     runs-on: ubuntu-latest
     outputs:
-      build: ${{ steps.pick.outputs.build }}
-      sha: ${{ steps.pick.outputs.sha }}
-      short: ${{ steps.pick.outputs.short }}
-      prev: ${{ steps.pick.outputs.prev }}
+      build: ${{ steps.plan.outputs.build }}
+      sha: ${{ steps.plan.outputs.sha }}
+      short: ${{ steps.plan.outputs.short }}
+      version: ${{ steps.plan.outputs.version }}
+      tag: ${{ steps.plan.outputs.tag }}
+      label: ${{ steps.plan.outputs.label }}
+      detail: ${{ steps.plan.outputs.detail }}
+      anchor_tag: ${{ steps.plan.outputs.anchor_tag }}
+      anchor_version: ${{ steps.plan.outputs.anchor_version }}
+      anchor_sha: ${{ steps.plan.outputs.anchor_sha }}
+      n: ${{ steps.plan.outputs.n }}
+      prev_sha: ${{ steps.plan.outputs.prev_sha }}
     steps:
-      - name: Pick the newest eligible upstream commit
-        id: pick
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install --no-save --prefix personal semver@7
+      - name: Plan the build
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_SHA: ${{ inputs.sha }}
           FORCE: ${{ inputs.force }}
-        run: |
-          set -euo pipefail
-          eligible() {
-            local runs
-            runs=$(gh api "repos/$UPSTREAM/commits/$1/check-runs?per_page=100" --paginate \
-              --jq '.check_runs[] | [.name, .status, (.conclusion // ""), (.started_at // "")] | @tsv')
-            # Every required check: its most recent run completed with success.
-            IFS='|' read -ra required <<< "$REQUIRED_CHECKS"
-            for name in "${required[@]}"; do
-              local last
-              last=$(printf '%s\n' "$runs" | awk -F'\t' -v n="$name" '$1==n' | sort -t$'\t' -k4 | tail -n1)
-              [ -n "$last" ] || return 1
-              [ "$(cut -f2 <<< "$last")" = completed ] && [ "$(cut -f3 <<< "$last")" = success ] || return 1
-            done
-            # Desktop E2E scenarios don't run on every commit, but if any ran and failed, skip.
-            if printf '%s\n' "$runs" | awk -F'\t' '$1 ~ /scenarios/ && $2=="completed" && $3!="success" && $3!="skipped" && $3!="neutral"' | grep -q .; then
-              return 1
-            fi
-          }
-
-          if [ -n "$INPUT_SHA" ]; then
-            sha=$(gh api "repos/$UPSTREAM/commits/$INPUT_SHA" --jq .sha)
-          else
-            sha=""
-            for candidate in $(gh api "repos/$UPSTREAM/commits?sha=main&per_page=30" --jq '.[].sha'); do
-              if eligible "$candidate"; then sha=$candidate; break; fi
-            done
-          fi
-          if [ -z "$sha" ]; then
-            echo "No eligible commit among the latest 30 on main."
-            echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
-          fi
-          short=${sha:0:8}
-          echo "sha=$sha" >> "$GITHUB_OUTPUT"
-          echo "short=$short" >> "$GITHUB_OUTPUT"
-
-          # The previous build's full SHA is stored in its release body.
-          prev=$(gh release view --repo "$GITHUB_REPOSITORY" --json body --jq .body 2>/dev/null \
-            | sed -n 's/^Upstream commit: `\([0-9a-f]\{40\}\)`.*/\1/p' | head -n1 || true)
-          echo "prev=$prev" >> "$GITHUB_OUTPUT"
-
-          if [ "$FORCE" != "true" ]; then
-            if gh release view "main-$short" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-              echo "main-$short is already built."
-              echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
-            fi
-            if [ -n "$prev" ]; then
-              changed=$(gh api "repos/$UPSTREAM/compare/$prev...$sha" --jq '.files[].filename' \
-                | grep -E '^(apps/desktop/|packages/|pnpm-lock\.yaml|package\.json|Cargo\.lock)' || true)
-              if [ -z "$changed" ]; then
-                echo "No app changes between ${prev:0:8} and $short."
-                echo "build=false" >> "$GITHUB_OUTPUT"; exit 0
-              fi
-            fi
-          fi
-          echo "Building $short"
-          echo "build=true" >> "$GITHUB_OUTPUT"
+        run: node personal/plan.mjs
 
   build:
     needs: pick
@@ -116,15 +73,49 @@ jobs:
       VITE_API_URL: https://api.deadlockmods.app
       VITE_WEB_URL: https://deadlockmods.app
       VITE_AUTH_URL: https://auth.deadlockmods.app
-      SHA: ${{ needs.pick.outputs.sha }}
-      SHORT: ${{ needs.pick.outputs.short }}
-      PREV: ${{ needs.pick.outputs.prev }}
+      VITE_DMM_PERSONAL_VERSION: ${{ needs.pick.outputs.version }}
+      VITE_DMM_PERSONAL_LABEL: ${{ needs.pick.outputs.label }}
+      VITE_DMM_PERSONAL_NOTES_URL: ${{ format('https://github.com/{0}/releases/tag/{1}', github.repository, needs.pick.outputs.tag) }}
+      VERSION: ${{ needs.pick.outputs.version }}
+      TAG: ${{ needs.pick.outputs.tag }}
     steps:
+      # Patches are LF; keep the upstream checkout LF too so they apply exactly.
+      - run: git config --global core.autocrlf false
+
       - name: Check out upstream at the picked commit
         uses: actions/checkout@v7.0.1
         with:
           repository: ${{ env.UPSTREAM }}
           ref: ${{ needs.pick.outputs.sha }}
+
+      - name: Check out this repo's patches
+        uses: actions/checkout@v7.0.1
+        with:
+          path: .personal-repo
+
+      - name: Apply the personal patches (fails on any mismatch)
+        shell: bash
+        run: |
+          set -euo pipefail
+          for p in .personal-repo/personal/patches/*.patch; do
+            git apply --check "$p"
+            git apply "$p"
+            echo "applied $p"
+          done
+          # The behaviour the patches exist for must be present.
+          grep -q 'r3xsean/dmm-main-builds/releases/latest/download/latest.json' apps/desktop/src-tauri/src/updater_channel.rs
+          grep -q 'release.version > current' apps/desktop/src-tauri/src/app_updates.rs
+          ! grep -q 'release.version != current' apps/desktop/src-tauri/src/app_updates.rs
+          grep -q 'VITE_DMM_PERSONAL_LABEL' apps/desktop/src/lib/app-version-display.ts
+          grep -q 'VITE_DMM_PERSONAL_VERSION' apps/desktop/src/hooks/use-whats-new.ts
+
+      - name: Stamp version, labels and config
+        shell: bash
+        env:
+          DETAIL: ${{ needs.pick.outputs.detail }}
+          PERSONAL_DIR: .personal-repo/personal
+          OVERLAY: ${{ runner.temp }}/personal.tauri.conf.json
+        run: node .personal-repo/personal/stamp.mjs
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -158,7 +149,6 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      # Required by prost-build (steam-vent/valveprotos).
       - name: Install protoc
         uses: arduino/setup-protoc@v3
         with:
@@ -172,69 +162,147 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Stamp the version with the commit
-        shell: bash
-        run: pnpm version:nightly "$(git rev-parse --short HEAD)"
-
-      - name: Build the app
+      - name: Build the installer
         working-directory: apps/desktop
-        run: pnpm tauri build --no-bundle
+        run: pnpm tauri build --bundles nsis --config "${{ runner.temp }}/personal.tauri.conf.json"
 
-      - name: Stage the release files
+      - name: Stage the files
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          $version = (Get-Content -LiteralPath apps/desktop/package.json -Raw | ConvertFrom-Json).version
-          $exe = "dist/dmm-main-$env:SHORT.exe"
-          Copy-Item -LiteralPath apps/desktop/target/release/deadlock-mod-manager.exe -Destination $exe
+          $setup = Get-ChildItem apps/desktop/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
+          if (-not $setup) { throw 'No NSIS installer was produced.' }
+          Copy-Item -LiteralPath $setup.FullName -Destination "dist/DMM-main-$env:TAG-setup.exe"
+          Copy-Item -LiteralPath apps/desktop/target/release/deadlock-mod-manager.exe -Destination "dist/DMM-main-$env:TAG-portable.exe"
           Copy-Item -LiteralPath LICENSE.md -Destination dist/LICENSE.md
-          $date = git show -s --format=%cI HEAD
+          Copy-Item -Path .personal-repo/personal/patches/*.patch -Destination dist/
+
+      # The only step that sees the signing key; it runs nothing from upstream but the Tauri CLI.
+      - name: Sign the installer for the updater
+        working-directory: apps/desktop
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: pnpm tauri signer sign "../../dist/DMM-main-$env:TAG-setup.exe"
+
+      - name: Write the update manifest
+        shell: pwsh
+        env:
+          SHA: ${{ needs.pick.outputs.sha }}
+          ANCHOR_TAG: ${{ needs.pick.outputs.anchor_tag }}
+          ANCHOR_VERSION: ${{ needs.pick.outputs.anchor_version }}
+          ANCHOR_SHA: ${{ needs.pick.outputs.anchor_sha }}
+          N: ${{ needs.pick.outputs.n }}
+          LABEL: ${{ needs.pick.outputs.label }}
+          DETAIL: ${{ needs.pick.outputs.detail }}
+        run: |
+          $setupName = "DMM-main-$env:TAG-setup.exe"
+          $sig = (Get-Content -Raw "dist/$setupName.sig").Trim()
+          $url = "https://github.com/${{ github.repository }}/releases/download/$env:TAG/$setupName"
+          $platform = @{ signature = $sig; url = $url }
           [ordered]@{
-            tag = "main-$env:SHORT"
+            version = $env:VERSION
+            notes = "v$env:LABEL · $env:DETAIL"
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{ 'windows-x86_64-nsis' = $platform; 'windows-x86_64' = $platform }
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM dist/latest.json
+          [ordered]@{
+            format = 2
+            tag = $env:TAG
+            version = $env:VERSION
+            label = $env:LABEL
+            detail = $env:DETAIL
             sha = $env:SHA
-            version = $version
-            committed = $date
+            n = [int]$env:N
+            anchor = [ordered]@{ tag = $env:ANCHOR_TAG; version = $env:ANCHOR_VERSION; sha = $env:ANCHOR_SHA }
+            patchRev = "${{ github.sha }}"
             built = (Get-Date).ToUniversalTime().ToString("o")
-            exe = "dmm-main-$env:SHORT.exe"
-            sha256 = (Get-FileHash -Algorithm SHA256 $exe).Hash.ToLower()
+            setup = $setupName
+            setupSha256 = (Get-FileHash -Algorithm SHA256 "dist/$setupName").Hash.ToLower()
             run = "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          } | ConvertTo-Json | Set-Content -Encoding utf8 dist/manifest.json
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8NoBOM dist/manifest.json
           Get-Content dist/manifest.json
 
-      - name: Publish the release
-        shell: bash
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release
+          path: dist/
+          if-no-files-found: error
+
+  test:
+    needs: [pick, build]
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
+      - name: Install over the official nightly
+        shell: pwsh
+        run: ./personal/migration-test.ps1 -Setup "dist/DMM-main-${{ needs.pick.outputs.tag }}-setup.exe" -Version "${{ needs.pick.outputs.version }}" -Upstream "${{ env.UPSTREAM }}"
+
+  publish:
+    needs: [pick, build, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.pick.outputs.tag }}
+      VERSION: ${{ needs.pick.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v8
+        with:
+          name: release
+          path: dist
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - run: npm install --no-save --prefix personal semver@7
+      - name: Re-check that this is still the newest build
         env:
-          GH_TOKEN: ${{ github.token }}
+          NODE_PATH: personal/node_modules
         run: |
           set -euo pipefail
-          subject=$(git show -s --format=%s HEAD)
+          # `pick` already checked this; check again in case another run published meanwhile.
+          if gh release download --repo "$GITHUB_REPOSITORY" --pattern manifest.json --dir prev 2>/dev/null; then
+            prev_version=$(jq -r .version prev/manifest.json)
+            node -e 'const s=require("semver"); const [v,p]=process.argv.slice(1); if(!s.gt(v,p)){console.error(`::error::${v} is not newer than ${p}`);process.exit(1)} console.log(`${v} > ${p}`)' "$VERSION" "$prev_version"
+          fi
+      - name: Publish
+        env:
+          LABEL: ${{ needs.pick.outputs.label }}
+          DETAIL: ${{ needs.pick.outputs.detail }}
+          SHA: ${{ needs.pick.outputs.sha }}
+          PREV: ${{ needs.pick.outputs.prev_sha }}
+          ANCHOR_VERSION: ${{ needs.pick.outputs.anchor_version }}
+        run: |
+          set -euo pipefail
+          subject=$(gh api "repos/$UPSTREAM/commits/$SHA" --jq '.commit.message | split("\n")[0]')
           {
-            echo "Unofficial build of [Deadlock Mod Manager](https://github.com/$UPSTREAM) \`main\`. Not affiliated with or supported by the DMM team."
+            echo "**v$LABEL** · $DETAIL"
             echo
-            echo "Upstream commit: \`$SHA\` ([source](https://github.com/$UPSTREAM/tree/$SHA))"
-            echo "Latest change: $subject"
+            echo "Unofficial personal build of [Deadlock Mod Manager](https://github.com/$UPSTREAM) \`main\`. Not affiliated with or supported by the DMM team."
             echo
-            echo "Built with upstream's nightly settings (release, thin LTO, 16 codegen units), unsigned, no installer. Licensed GPL-3.0; source at the commit above."
-            if [ -n "$PREV" ]; then
+            echo "- Version: \`$VERSION\`"
+            echo "- Upstream commit: [\`${SHA:0:8}\`](https://github.com/$UPSTREAM/commit/$SHA) — $subject"
+            echo "- Counted from official \`$ANCHOR_VERSION\`"
+            echo "- Changes from upstream: the attached \`.patch\` files (personal update feed and key, newer-only updates, sidebar label, no automatic What's New, backups in the installer). Source: upstream at that commit plus those patches. GPL-3.0."
+            if [ -n "$PREV" ] && [ "$PREV" != "$SHA" ]; then
               echo
-              echo "## Changes since ${PREV:0:8}"
+              echo "## Upstream changes since the last build"
               echo
-              gh api "repos/$UPSTREAM/compare/$PREV...$SHA" --jq '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:8] + ")"' | tail -n 50
+              gh api "repos/$UPSTREAM/compare/$PREV...$SHA" --jq '.commits[] | "- " + (.commit.message | split("\n")[0]) + " (" + .sha[0:8] + ")"' | tail -n 60
             fi
           } > notes.md
-          gh release create "main-$SHORT" dist/* \
-            --repo "$GITHUB_REPOSITORY" \
-            --title "main $SHORT" \
-            --notes-file notes.md \
-            --latest
-
+          # Upload everything as a draft first; only then make it the release the app sees.
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --title "v$LABEL ($TAG)" --notes-file notes.md --draft
+          gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
       - name: Keep the newest 15 builds
-        shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
             --jq 'map(select(.tagName | startswith("main-"))) | sort_by(.createdAt) | reverse | .[15:] | .[].tagName' \
-            | while read -r tag; do
-                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
-              done
+            | while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done

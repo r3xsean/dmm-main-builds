@@ -1,0 +1,90 @@
+diff --git a/apps/desktop/src-tauri/src/app_updates.rs b/apps/desktop/src-tauri/src/app_updates.rs
+index cab9c79c..4b042d78 100644
+--- a/apps/desktop/src-tauri/src/app_updates.rs
++++ b/apps/desktop/src-tauri/src/app_updates.rs
+@@ -106,9 +106,8 @@ pub async fn check_app_update(webview: tauri::Webview<AppRuntime>) -> UpdateChec
+         .collect::<Result<Vec<_>, _>>()?;
+       builder = builder.endpoints(endpoints)?;
+     }
+-    if context.channel == UpdateChannel::Nightly {
+-      builder = builder.version_comparator(|current, release| release.version != current);
+-    }
++    // dmm-main-builds: only ever move to a strictly newer personal build.
++    builder = builder.version_comparator(|current, release| release.version > current);
+     builder.build()?.check().await
+   };
+   let outcome = match check.await {
+diff --git a/apps/desktop/src-tauri/src/updater_channel.rs b/apps/desktop/src-tauri/src/updater_channel.rs
+index d52267a5..5decd945 100644
+--- a/apps/desktop/src-tauri/src/updater_channel.rs
++++ b/apps/desktop/src-tauri/src/updater_channel.rs
+@@ -23,7 +23,16 @@ const CEF_NIGHTLY_ENDPOINTS: [&str; 2] = [
+   "https://github.com/deadlock-mod-manager/deadlock-mod-manager/releases/download/nightly/latest-cef.json",
+ ];
+ 
+-pub(crate) fn endpoints_for(channel: &UpdateChannel) -> &'static [&'static str] {
++// dmm-main-builds: every channel reads the personal feed only.
++const PERSONAL_ENDPOINTS: [&str; 1] =
++  ["https://github.com/r3xsean/dmm-main-builds/releases/latest/download/latest.json"];
++
++pub(crate) fn endpoints_for(_channel: &UpdateChannel) -> &'static [&'static str] {
++  &PERSONAL_ENDPOINTS
++}
++
++#[allow(dead_code)]
++fn upstream_endpoints_for(channel: &UpdateChannel) -> &'static [&'static str] {
+   match channel {
+     UpdateChannel::Stable => {
+       if cfg!(feature = "cef") {
+diff --git a/apps/desktop/src/hooks/use-whats-new.ts b/apps/desktop/src/hooks/use-whats-new.ts
+index 2fb2c42a..c4aceff4 100644
+--- a/apps/desktop/src/hooks/use-whats-new.ts
++++ b/apps/desktop/src/hooks/use-whats-new.ts
+@@ -32,6 +32,11 @@ export const useWhatsNew = () => {
+     // Show "What's New" if:
+     // 1. No version has been seen before (first time user)
+     // 2. Current version is different from last seen version
++    // dmm-main-builds: personal builds arrive several times a day, so the
++    // dialog only opens when asked for.
++    if (import.meta.env.VITE_DMM_PERSONAL_VERSION) {
++      return;
++    }
+     if (!lastSeenVersion || lastSeenVersion !== currentVersion) {
+       setShowWhatsNew(true);
+     }
+diff --git a/apps/desktop/src/lib/app-version-display.ts b/apps/desktop/src/lib/app-version-display.ts
+index b636c337..c14f43a7 100644
+--- a/apps/desktop/src/lib/app-version-display.ts
++++ b/apps/desktop/src/lib/app-version-display.ts
+@@ -3,10 +3,20 @@ import { GITHUB_REPO } from "./constants";
+ 
+ const NIGHTLY_VERSION = /^(\d+\.\d+\.\d+)-nightly\.(\d{8})\.([0-9a-f]+)$/i;
+ 
++// dmm-main-builds: this build's own version, short label and release page.
++const PERSONAL_VERSION: string | undefined = import.meta.env.VITE_DMM_PERSONAL_VERSION;
++const PERSONAL_LABEL: string | undefined = import.meta.env.VITE_DMM_PERSONAL_LABEL;
++const PERSONAL_NOTES_URL: string | undefined = import.meta.env.VITE_DMM_PERSONAL_NOTES_URL;
++const isPersonalVersion = (version: string): boolean =>
++  Boolean(PERSONAL_VERSION && PERSONAL_LABEL && version === PERSONAL_VERSION);
++
+ export const isNightlyBuildVersion = (version: string): boolean =>
+-  NIGHTLY_VERSION.test(version);
++  isPersonalVersion(version) || NIGHTLY_VERSION.test(version);
+ 
+ export const getDisplaySemver = (version: string): string => {
++  if (isPersonalVersion(version) && PERSONAL_LABEL) {
++    return PERSONAL_LABEL;
++  }
+   const match = version.match(NIGHTLY_VERSION);
+   if (match?.[1]) {
+     return match[1];
+@@ -22,6 +32,9 @@ export const getReleaseNotesUrl = (version?: string): string => {
+   if (!version) {
+     return `${WEB_URL}/changelog`;
+   }
++  if (isPersonalVersion(version) && PERSONAL_NOTES_URL) {
++    return PERSONAL_NOTES_URL;
++  }
+   if (isNightlyBuildVersion(version)) {
+     return `${GITHUB_REPO}/releases/tag/nightly`;
+   }
