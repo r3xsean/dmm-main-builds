@@ -172,8 +172,8 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           $setup = Get-ChildItem apps/desktop/target/release/bundle/nsis/*-setup.exe | Select-Object -First 1
           if (-not $setup) { throw 'No NSIS installer was produced.' }
-          Copy-Item -LiteralPath $setup.FullName -Destination "dist/DMM-main-$env:TAG-setup.exe"
-          Copy-Item -LiteralPath apps/desktop/target/release/deadlock-mod-manager.exe -Destination "dist/DMM-main-$env:TAG-portable.exe"
+          Copy-Item -LiteralPath $setup.FullName -Destination "dist/DMM-$env:TAG-setup.exe"
+          Copy-Item -LiteralPath apps/desktop/target/release/deadlock-mod-manager.exe -Destination "dist/DMM-$env:TAG-portable.exe"
           Copy-Item -LiteralPath LICENSE.md -Destination dist/LICENSE.md
           Copy-Item -Path .personal-repo/personal/patches/*.patch -Destination dist/
 
@@ -183,7 +183,7 @@ jobs:
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: pnpm tauri signer sign "../../dist/DMM-main-$env:TAG-setup.exe"
+        run: pnpm tauri signer sign "../../dist/DMM-$env:TAG-setup.exe"
 
       - name: Write the update manifest
         shell: pwsh
@@ -196,7 +196,7 @@ jobs:
           LABEL: ${{ needs.pick.outputs.label }}
           DETAIL: ${{ needs.pick.outputs.detail }}
         run: |
-          $setupName = "DMM-main-$env:TAG-setup.exe"
+          $setupName = "DMM-$env:TAG-setup.exe"
           $sig = (Get-Content -Raw "dist/$setupName.sig").Trim()
           $url = "https://github.com/${{ github.repository }}/releases/download/$env:TAG/$setupName"
           $platform = @{ signature = $sig; url = $url }
@@ -241,7 +241,7 @@ jobs:
           path: dist
       - name: Install over the official nightly
         shell: pwsh
-        run: ./personal/migration-test.ps1 -Setup "dist/DMM-main-${{ needs.pick.outputs.tag }}-setup.exe" -Version "${{ needs.pick.outputs.version }}" -Upstream "${{ env.UPSTREAM }}"
+        run: ./personal/migration-test.ps1 -Setup "dist/DMM-${{ needs.pick.outputs.tag }}-setup.exe" -Version "${{ needs.pick.outputs.version }}" -Upstream "${{ env.UPSTREAM }}"
 
   publish:
     needs: [pick, build, test]
