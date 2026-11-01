@@ -6,7 +6,8 @@ name: Build latest main
 
 on:
   schedule:
-    - cron: "*/15 * * * *"
+    # Off the quarter hours, which GitHub delays or drops under load.
+    - cron: "7,22,37,52 * * * *"
   workflow_dispatch:
     inputs:
       sha:
