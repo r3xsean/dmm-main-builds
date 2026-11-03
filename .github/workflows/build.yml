@@ -304,6 +304,11 @@ jobs:
           gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --draft=false --latest
       - name: Keep the newest 15 builds
         run: |
-          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName,createdAt \
-            --jq 'map(select(.tagName | startswith("main-"))) | sort_by(.createdAt) | reverse | .[15:] | .[].tagName' \
-            | while read -r tag; do gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag; done
+          # Order by run number: every release's createdAt is the same (the date of
+          # the commit its tag points at), so sorting by it deleted new builds.
+          gh release list --repo "$GITHUB_REPOSITORY" --limit 100 --json tagName \
+            --jq 'map(.tagName | select(test("^main-[0-9]+$"))) | sort_by(ltrimstr("main-") | tonumber) | reverse | .[15:] | .[]' \
+            | while read -r tag; do
+                [ "$tag" = "$TAG" ] && continue
+                gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
+              done
