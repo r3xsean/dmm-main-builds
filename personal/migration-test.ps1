@@ -21,15 +21,21 @@ function Install([string]$path, [string[]]$installerArgs) {
   $p = Start-Process -FilePath $path -ArgumentList $installerArgs -Wait -PassThru
   return $p.ExitCode
 }
+# GitHub sometimes answers with 5xx for a while; retry before failing the test.
+function Retry([scriptblock]$action) {
+  for ($i = 1; ; $i++) {
+    try { return & $action } catch { if ($i -ge 5) { throw }; Write-Host "retry $i after: $($_.Exception.Message)"; Start-Sleep -Seconds (15 * $i) }
+  }
+}
 function Get-Backups { @(Get-ChildItem -LiteralPath $Backups -Directory -ErrorAction SilentlyContinue | Where-Object { Test-Path (Join-Path $_.FullName 'COMPLETE') }) }
 function Get-Protocols { @('deadlock-mod-manager', 'deadlock-modmanager', 'dlmm' | Where-Object { Test-Path "HKCU:\Software\Classes\$_" }) }
 
 # 1. Official nightly, as r3xsean has it today
-$release = Invoke-RestMethod "https://api.github.com/repos/$Upstream/releases/tags/nightly" -Headers @{ 'User-Agent' = 'dmm-main-builds' }
+$release = Retry { Invoke-RestMethod "https://api.github.com/repos/$Upstream/releases/tags/nightly" -Headers @{ 'User-Agent' = 'dmm-main-builds' } }
 $asset = $release.assets | Where-Object { $_.name -match '_x64-setup\.exe$' -and $_.name -notmatch 'cef' } | Select-Object -First 1
 if (-not $asset) { throw 'No official nightly x64 setup asset found.' }
 $official = Join-Path $env:RUNNER_TEMP $asset.name
-Invoke-WebRequest $asset.browser_download_url -OutFile $official
+Retry { Invoke-WebRequest $asset.browser_download_url -OutFile $official }
 Check 'official nightly installs' ((Install $official @('/S')) -eq 0)
 $officialVersion = (Get-Item $Exe).VersionInfo.ProductVersion
 Write-Host "official version: $officialVersion"
