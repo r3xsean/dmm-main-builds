@@ -32,10 +32,22 @@ const gh = (path, { allow404 = false } = {}) => {
     fail(`GitHub API ${path} failed: ${String(e.stderr ?? e.message).trim()}`);
   }
 };
-const download = async (url) => {
-  const res = await fetch(url, { headers: { "User-Agent": "dmm-main-builds" }, redirect: "follow" });
-  if (!res.ok) fail(`Download ${url} failed: HTTP ${res.status}`);
-  return res;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// Reads a JSON release asset. The assets API is tried first, with retries,
+// because the browser download link sometimes returns 5xx for hours.
+const readAsset = async (asset) => {
+  const errors = [];
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return JSON.parse(execFileSync("gh", ["api", "-H", "Accept: application/octet-stream", asset.url], { encoding: "utf8", maxBuffer: 64 << 20 }));
+    } catch (e) {
+      errors.push(String(e.stderr ?? e.message).trim());
+      await sleep(attempt * 5000);
+    }
+  }
+  const res = await fetch(asset.browser_download_url, { headers: { "User-Agent": "dmm-main-builds" }, redirect: "follow" });
+  if (res.ok) return res.json();
+  fail(`Download of ${asset.name} failed: API: ${errors.at(-1)}; ${asset.browser_download_url}: HTTP ${res.status}`);
 };
 
 // 1. Candidate
@@ -64,7 +76,7 @@ let anchor = null;
 for (const r of releases) {
   const asset = r.assets.find((a) => a.name === "latest.json");
   if (!asset) continue;
-  const manifest = await (await download(asset.browser_download_url)).json();
+  const manifest = await readAsset(asset);
   const platforms = manifest.platforms ?? {};
   if (!platforms["windows-x86_64-nsis"] && !platforms["windows-x86_64"]) continue;
   if (!semver.valid(manifest.version)) fail(`Official ${r.tag_name} has an invalid version ${manifest.version}`);
@@ -90,7 +102,7 @@ let prev = null;
 if (latest) {
   const m = latest.assets.find((a) => a.name === "manifest.json");
   if (!m) fail(`Latest personal release ${latest.tag_name} has no manifest.json.`);
-  prev = await (await download(m.browser_download_url)).json();
+  prev = await readAsset(m);
   if (!semver.valid(prev.version)) fail(`Latest personal release has an invalid version ${prev.version}`);
 }
 

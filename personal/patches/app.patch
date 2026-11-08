@@ -1,15 +1,12 @@
 diff --git a/apps/desktop/src-tauri/src/app_updates.rs b/apps/desktop/src-tauri/src/app_updates.rs
-index cab9c79c..4b042d78 100644
+index f02adea0..2dde4d70 100644
 --- a/apps/desktop/src-tauri/src/app_updates.rs
 +++ b/apps/desktop/src-tauri/src/app_updates.rs
-@@ -106,9 +106,8 @@ pub async fn check_app_update(webview: tauri::Webview<AppRuntime>) -> UpdateChec
-         .collect::<Result<Vec<_>, _>>()?;
-       builder = builder.endpoints(endpoints)?;
+@@ -121,6 +121,8 @@ pub async fn check_app_update(webview: tauri::Webview<AppRuntime>) -> UpdateChec
+       builder = builder
+         .version_comparator(|current, release| nightly_offers_release(&current, &release.version));
      }
--    if context.channel == UpdateChannel::Nightly {
--      builder = builder.version_comparator(|current, release| release.version != current);
--    }
-+    // dmm-main-builds: only ever move to a strictly newer personal build.
++    // dmm-main-builds: replaces the rule above; only ever move to a strictly newer personal build.
 +    builder = builder.version_comparator(|current, release| release.version > current);
      builder.build()?.check().await
    };

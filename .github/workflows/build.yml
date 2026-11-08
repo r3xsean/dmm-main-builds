@@ -106,7 +106,8 @@ jobs:
           # The behaviour the patches exist for must be present.
           grep -q 'r3xsean/dmm-main-builds/releases/latest/download/latest.json' apps/desktop/src-tauri/src/updater_channel.rs
           grep -q 'release.version > current' apps/desktop/src-tauri/src/app_updates.rs
-          ! grep -q 'release.version != current' apps/desktop/src-tauri/src/app_updates.rs
+          # Ours must be the last comparator set, so it replaces upstream's nightly rule.
+          grep 'version_comparator' apps/desktop/src-tauri/src/app_updates.rs | tail -n 1 | grep -q 'release.version > current'
           grep -q 'VITE_DMM_PERSONAL_LABEL' apps/desktop/src/lib/app-version-display.ts
           grep -q 'VITE_DMM_PERSONAL_VERSION' apps/desktop/src/hooks/use-whats-new.ts
 
