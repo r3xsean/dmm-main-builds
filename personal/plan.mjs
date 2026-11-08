@@ -66,7 +66,7 @@ if (!sha) {
   }
 }
 if (!sha) stop("No eligible commit among the latest 30 on main.");
-const short = sha.slice(0, 8);
+let short = sha.slice(0, 8);
 
 // 2. Anchor: most recently published official Windows release
 const releases = gh(`repos/${UPSTREAM}/releases?per_page=30`)
@@ -90,7 +90,17 @@ if (!anchor) fail("No published official Windows release found.");
 const recheck = gh(`repos/${UPSTREAM}/releases/${anchor.id}`);
 if (recheck.published_at !== anchor.published) fail(`Official ${anchor.tag} changed while being read; next run will retry.`);
 
-const cmp = gh(`repos/${UPSTREAM}/compare/${anchor.sha}...${sha}`);
+let cmp = gh(`repos/${UPSTREAM}/compare/${anchor.sha}...${sha}`);
+// Upstream shipped a newer commit than any that passed the gate (e.g. its E2E
+// is red but it published the nightly anyway). Build what upstream shipped.
+if (cmp.status === "behind" && !INPUT_SHA) {
+  const onMain = gh(`repos/${UPSTREAM}/compare/${anchor.sha}...main`).status;
+  if (!["ahead", "identical"].includes(onMain)) fail(`Official ${anchor.tag} at ${anchor.sha.slice(0, 8)} isn't on main (status: ${onMain}).`);
+  console.log(`Newest commit passing the gate (${short}) is older than official ${anchor.tag}; building ${anchor.sha.slice(0, 8)}, which upstream shipped.`);
+  sha = anchor.sha;
+  short = sha.slice(0, 8);
+  cmp = { status: "identical", ahead_by: 0 };
+}
 if (!["ahead", "identical"].includes(cmp.status)) {
   fail(`Official ${anchor.tag} (${anchor.version}, ${anchor.sha.slice(0, 8)}) isn't in main's history at ${short} (status: ${cmp.status}). Not publishing a build that would claim to be past it.`);
 }
