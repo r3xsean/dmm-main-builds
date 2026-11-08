@@ -164,9 +164,26 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      # Tauri downloads NSIS and its plugins from GitHub releases while bundling;
+      # keep them so a GitHub download outage can't fail the bundle.
+      - name: Cache Tauri bundler tools
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/tauri
+          key: tauri-bundler-tools-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: tauri-bundler-tools-
+
       - name: Build the installer
         working-directory: apps/desktop
-        run: pnpm tauri build --bundles nsis --config "${{ runner.temp }}/personal.tauri.conf.json"
+        shell: bash
+        # A retry reuses the compiled output, so it only redoes the bundling.
+        run: |
+          for attempt in 1 2 3 4; do
+            pnpm tauri build --bundles nsis --config "${{ runner.temp }}/personal.tauri.conf.json" && exit 0
+            [ "$attempt" = 4 ] && exit 1
+            echo "::warning::Build attempt $attempt failed; retrying in $((attempt * 60))s"
+            sleep $((attempt * 60))
+          done
 
       - name: Stage the files
         shell: pwsh
