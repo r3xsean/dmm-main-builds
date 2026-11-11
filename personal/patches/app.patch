@@ -34,21 +34,22 @@ index d52267a5..5decd945 100644
      UpdateChannel::Stable => {
        if cfg!(feature = "cef") {
 diff --git a/apps/desktop/src/hooks/use-whats-new.ts b/apps/desktop/src/hooks/use-whats-new.ts
-index 2fb2c42a..c4aceff4 100644
+index 66f5f27b..a823fc64 100644
 --- a/apps/desktop/src/hooks/use-whats-new.ts
 +++ b/apps/desktop/src/hooks/use-whats-new.ts
-@@ -32,6 +32,11 @@ export const useWhatsNew = () => {
-     // Show "What's New" if:
-     // 1. No version has been seen before (first time user)
-     // 2. Current version is different from last seen version
+@@ -30,6 +30,12 @@ export const useWhatsNew = () => {
+     const currentVersion = data.version;
+     const lastSeenVersion = localStorage.getItem(LAST_SEEN_VERSION_KEY);
+ 
 +    // dmm-main-builds: personal builds arrive several times a day, so the
 +    // dialog only opens when asked for.
 +    if (import.meta.env.VITE_DMM_PERSONAL_VERSION) {
 +      return;
 +    }
-     if (!lastSeenVersion || lastSeenVersion !== currentVersion) {
-       setShowWhatsNew(true);
-     }
++
+     // Show "What's New" if:
+     // 1. No version has been seen before (first time user)
+     // 2. Current release is different from the last seen release
 diff --git a/apps/desktop/src/lib/app-version-display.ts b/apps/desktop/src/lib/app-version-display.ts
 index b636c337..c14f43a7 100644
 --- a/apps/desktop/src/lib/app-version-display.ts
