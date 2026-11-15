@@ -70,7 +70,6 @@ jobs:
     env:
       CARGO_PROFILE_RELEASE_LTO: thin
       CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "16"
-      SCCACHE_IDLE_TIMEOUT: "0"
       VITE_API_URL: https://api.deadlockmods.app
       VITE_WEB_URL: https://deadlockmods.app
       VITE_AUTH_URL: https://auth.deadlockmods.app
@@ -124,17 +123,6 @@ jobs:
         with:
           toolchain: stable
 
-      - name: Setup sccache
-        uses: mozilla-actions/sccache-action@v0.0.11
-
-      - name: Configure sccache for cargo
-        shell: bash
-        run: |
-          SCCACHE_WRAPPER="${SCCACHE_PATH//\\//}"
-          echo "RUSTC_WRAPPER=${SCCACHE_WRAPPER}" >> "$GITHUB_ENV"
-          mkdir -p "$CARGO_HOME"
-          printf '[build]\nrustc-wrapper = "%s"\n' "$SCCACHE_WRAPPER" >> "$CARGO_HOME/config.toml"
-
       - name: Rust cache
         uses: Swatinem/rust-cache@v2
         with:
@@ -176,16 +164,12 @@ jobs:
       - name: Build the installer
         working-directory: apps/desktop
         shell: bash
-        # A retry reuses the compiled output, so it usually only redoes the bundling.
-        # sccache has failed whole builds with "encountered fatal error", so
-        # retries compile without it.
+        # A retry reuses the compiled output, so it only redoes the bundling.
         run: |
           for attempt in 1 2 3 4; do
             pnpm tauri build --bundles nsis --config "${{ runner.temp }}/personal.tauri.conf.json" && exit 0
             [ "$attempt" = 4 ] && exit 1
-            echo "::warning::Build attempt $attempt failed; retrying in $((attempt * 60))s without sccache"
-            unset RUSTC_WRAPPER
-            sed -i '/rustc-wrapper/d' "$CARGO_HOME/config.toml"
+            echo "::warning::Build attempt $attempt failed; retrying in $((attempt * 60))s"
             sleep $((attempt * 60))
           done
 
@@ -264,6 +248,8 @@ jobs:
           path: dist
       - name: Install over the official nightly
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: ./personal/migration-test.ps1 -Setup "dist/DMM-${{ needs.pick.outputs.tag }}-setup.exe" -Version "${{ needs.pick.outputs.version }}" -Upstream "${{ env.UPSTREAM }}"
 
   publish:
@@ -271,6 +257,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      issues: write
     env:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.pick.outputs.tag }}
@@ -334,3 +321,32 @@ jobs:
                 [ "$tag" = "$TAG" ] && continue
                 gh release delete "$tag" --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag
               done
+      - name: Close the build-broken issue
+        run: |
+          gh issue list --repo "$GITHUB_REPOSITORY" --label build-broken --state open --json number --jq '.[].number' \
+            | while read -r n; do gh issue close "$n" --repo "$GITHUB_REPOSITORY" --comment "Fixed: $TAG ($VERSION) is published."; done
+
+  # Starts a T3 Code fix thread on r3xsean's PC, once per outage: after two
+  # failed runs in a row, and only while no build-broken issue is open.
+  alert:
+    needs: [pick, build, test, publish]
+    if: failure()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - env:
+          WEBHOOK: ${{ secrets.T3_FIX_WEBHOOK }}
+        run: |
+          set -euo pipefail
+          prev=$(gh run list --repo "$GITHUB_REPOSITORY" --workflow build.yml --limit 20 --json databaseId,status,conclusion \
+            --jq "[.[] | select(.status == \"completed\" and .conclusion != \"cancelled\" and .databaseId != $GITHUB_RUN_ID)][0].conclusion")
+          [ "$prev" = failure ] || { echo "Previous run: $prev; not alerting yet."; exit 0; }
+          open=$(gh issue list --repo "$GITHUB_REPOSITORY" --label build-broken --state open --json number --jq length)
+          [ "$open" = 0 ] || { echo "build-broken issue already open."; exit 0; }
+          curl -fsS --retry 3 -X POST -H 'Content-Type: application/json' -d "{\"run\":\"$GITHUB_RUN_ID\"}" "$WEBHOOK"
+          gh issue create --repo "$GITHUB_REPOSITORY" --label build-broken --title "Builds are failing" \
+            --body "Two runs in a row failed, latest $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID. A T3 Code fix thread was started; a published build closes this."

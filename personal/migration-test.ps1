@@ -31,7 +31,7 @@ function Get-Backups { @(Get-ChildItem -LiteralPath $Backups -Directory -ErrorAc
 function Get-Protocols { @('deadlock-mod-manager', 'deadlock-modmanager', 'dlmm' | Where-Object { Test-Path "HKCU:\Software\Classes\$_" }) }
 
 # 1. Official nightly, as r3xsean has it today
-$release = Retry { Invoke-RestMethod "https://api.github.com/repos/$Upstream/releases/tags/nightly" -Headers @{ 'User-Agent' = 'dmm-main-builds' } }
+$release = Retry { Invoke-RestMethod "https://api.github.com/repos/$Upstream/releases/tags/nightly" -Headers @{ 'User-Agent' = 'dmm-main-builds'; Authorization = "Bearer $env:GH_TOKEN" } }
 $asset = $release.assets | Where-Object { $_.name -match '_x64-setup\.exe$' -and $_.name -notmatch 'cef' } | Select-Object -First 1
 if (-not $asset) { throw 'No official nightly x64 setup asset found.' }
 $official = Join-Path $env:RUNNER_TEMP $asset.name

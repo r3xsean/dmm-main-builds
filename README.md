@@ -11,7 +11,7 @@ Unofficial personal Windows builds of [Deadlock Mod Manager](https://github.com/
 
 ## How a build is made
 
-[The workflow](.github/workflows/build.yml) runs every 15 minutes:
+[The workflow](.github/workflows/build.yml) runs every 15 minutes, started by a launchd job on r3xsean's Mac because GitHub's schedule trigger is unreliable. When two runs in a row fail, it opens a `build-broken` issue and starts a T3 Code fix thread on r3xsean's PC; the next published build closes the issue.
 
 1. **Pick.** It picks the newest upstream `main` commit where `Type Check`, `Run Tests` and `Run Rust Tests` passed and no E2E scenario check failed.
 2. **Name.** It names the build after the most recently published official Windows release, which must be in `main`'s history. The version is `C-main.<run>.<commits>+g<commit>`, e.g. `2.3.1-main.57.163+g0ca70a40`. `C` is one patch above the official version, so every build sorts above the official install it replaces and above every earlier personal build. The sidebar shows the readable form.
