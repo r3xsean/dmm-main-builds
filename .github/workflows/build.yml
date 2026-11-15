@@ -176,12 +176,16 @@ jobs:
       - name: Build the installer
         working-directory: apps/desktop
         shell: bash
-        # A retry reuses the compiled output, so it only redoes the bundling.
+        # A retry reuses the compiled output, so it usually only redoes the bundling.
+        # sccache has failed whole builds with "encountered fatal error", so
+        # retries compile without it.
         run: |
           for attempt in 1 2 3 4; do
             pnpm tauri build --bundles nsis --config "${{ runner.temp }}/personal.tauri.conf.json" && exit 0
             [ "$attempt" = 4 ] && exit 1
-            echo "::warning::Build attempt $attempt failed; retrying in $((attempt * 60))s"
+            echo "::warning::Build attempt $attempt failed; retrying in $((attempt * 60))s without sccache"
+            unset RUSTC_WRAPPER
+            sed -i '/rustc-wrapper/d' "$CARGO_HOME/config.toml"
             sleep $((attempt * 60))
           done
 
